@@ -1,0 +1,8 @@
+rasterio
+geopandas
+seaborn
+numba
+numba==0.56.4
+s2
+tqdm
+scipy
