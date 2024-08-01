@@ -11,6 +11,9 @@ import inspect
 import glob
 import shapely
 import shapely.ops
+import datetime
+import gzip
+import shutil
 
 
 def get_default_args(func):
@@ -263,3 +266,127 @@ def get_actual_bounds_gdf(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
         crs=out_meta['crs'],
     )
     return actual_bounds_gdf
+
+
+def decompress_gzip(gzip_filepath:str, out_filepath:str):
+    with gzip.open(gzip_filepath) as gzip_file:
+        with open(out_filepath, 'wb') as f_out:
+            shutil.copyfileobj(gzip_file, f_out)
+
+
+def read_tif(tif_filepath:str):
+    with rasterio.open(tif_filepath) as src:
+        ndarray = src.read()
+        meta = src.meta.copy()
+    return ndarray, meta
+
+
+def add_epochs_prefix(filepath, prefix:str=''):
+    temp_prefix = f"{prefix}{int(datetime.datetime.now().timestamp() * 1000000)}_"
+    temp_tif_filepath = modify_filepath(
+        filepath = filepath,
+        prefix = temp_prefix,
+    )
+    return temp_tif_filepath
+
+
+class GZipTIF(object):
+    def __init__(self, gzip_tif_filepath):
+        self.gzip_tif_filepath = gzip_tif_filepath
+        self.tif_filepath = None
+
+
+    def _generate_temp_tif_filepath(self):
+        gzip_tif_filepath_wo_ext = self.gzip_tif_filepath[:-3]
+        temp_tif_filepath = add_epochs_prefix(
+            filepath=gzip_tif_filepath_wo_ext, 
+            prefix='temp_'
+        )
+        return temp_tif_filepath
+    
+
+    def decompress_and_load(self, tif_filepath:str=None):
+        if self.tif_filepath is None:
+            if tif_filepath is None:
+                tif_filepath = self._generate_temp_tif_filepath()
+            self.tif_filepath = tif_filepath
+            decompress_gzip(
+                gzip_filepath=self.gzip_tif_filepath, 
+                out_filepath=self.tif_filepath,
+            )
+        return self.tif_filepath
+    
+
+    def delete_tif(self):
+        if self.tif_filepath is not None:
+            os.remove(self.tif_filepath)
+            self.tif_filepath = None
+    
+
+    def __del__(self):
+        self.delete_tif()
+        
+
+def get_mask_coords(
+    mask_tif_filepaths:list[str],
+):
+    with rasterio.open(mask_tif_filepaths[0]) as src:
+        meta = src.meta.copy()
+    
+    out_mask, out_transform = rasterio.merge.merge(
+        mask_tif_filepaths,
+        method=rasterio.merge.copy_max,
+    )
+    mask_xs, mask_ys = np.where(out_mask[0] == 1)
+
+    crs = meta['crs']
+    return mask_xs, mask_ys, out_transform, crs
+
+
+def compute_longlat(x:float, y:float, shift:float, transform:rasterio.Affine)->tuple[float]:
+    long, lat = transform * (y +  shift, x + shift)
+    return long, lat
+
+
+def add_point_geom_from_xy(
+    row:dict,
+    shift:float,
+    transform:rasterio.Affine,
+    x_col:str = 'x',
+    y_col:str = 'y',
+    point_geom_col:str = 'geometry',
+):
+    long, lat = compute_longlat(
+        x = row[x_col],
+        y = row[y_col],
+        shift = shift,
+        transform = transform,
+    )
+    row[point_geom_col] = shapely.Point(long, lat)
+    return row
+
+
+def create_xy_gdf(
+    mask_tif_filepaths:list[str]
+):
+    mask_xs, mask_ys, mask_transform, mask_crs = \
+    get_mask_coords(mask_tif_filepaths = mask_tif_filepaths)
+
+    xy_gdf = gpd.GeoDataFrame(pd.DataFrame(
+        data = {
+            'x': mask_xs,
+            'y': mask_ys,
+        }
+    ).apply(
+        lambda row: add_point_geom_from_xy(
+            row = row,
+            shift = 0.5,
+            transform = mask_transform,
+            x_col = 'x',
+            y_col = 'y',
+            point_geom_col = 'geometry',
+        ), axis=1
+    ), crs=mask_crs)[['geometry']]
+
+    return xy_gdf
+
