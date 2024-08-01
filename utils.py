@@ -386,7 +386,7 @@ def create_xy_gdf(
             y_col = 'y',
             point_geom_col = 'geometry',
         ), axis=1
-    ), crs=mask_crs)[['geometry']]
+    ), crs=mask_crs)
 
     return xy_gdf
 
