@@ -137,7 +137,7 @@ def plot_clustered_lineplots(
     crop_name:str,
     band_name:str,
     timeseries:np.ndarray,
-    y:list,
+    x:list,
     cluster_ids:np.ndarray, 
     save_filepath:str,
     alpha:float=0.05,
@@ -149,12 +149,12 @@ def plot_clustered_lineplots(
     ncols:int=3,
     limit_plots_per_cluster:int=1000,
     random_state:int=42,
-    y_label:str='dates',
+    x_label:str='dates',
     cluster_id_to_color_map:dict=None,
 ):
     n_points, n_timestamps = timeseries.shape
 
-    if len(y) != n_timestamps:
+    if len(x) != n_timestamps:
         raise ValueError('Length of y should match timeseries shape.')
     
     unique_cluster_ids, counts = np.unique(cluster_ids, return_counts=True)
@@ -176,7 +176,7 @@ def plot_clustered_lineplots(
             timeseries, 
             np.array([cluster_ids]).T
         ], axis=1),
-        columns=['id'] + y + ['cluster_id']
+        columns=['id'] + x + ['cluster_id']
     )
     _df['id'] = _df['id'].astype(int)
     _df['cluster_id'] = _df['cluster_id'].astype(int)
@@ -185,7 +185,7 @@ def plot_clustered_lineplots(
         df_to_melt_i = _df[_df['cluster_id']==cluster_id]
         melted_df_i = df_to_melt_i[_df.columns[:-1]].melt(
             id_vars='id',
-            var_name=y_label, 
+            var_name=x_label, 
             value_name=band_name,
         )
         melted_df_i['cluster_id'] = cluster_id
@@ -205,7 +205,7 @@ def plot_clustered_lineplots(
         _df_plot = _df_melted[_df_melted['cluster_id']==cluster_number]
         count = _df_plot['id'].unique().shape[0]
         ids = _df_plot['id'].unique().tolist()
-        np.random.RandomState(seed=random_state).shuffle(x=ids)
+        np.random.RandomState(seed=random_state).shuffle(ids)
         selected_ids = ids[:limit_plots_per_cluster]
         _df_plot = _df_plot[_df_plot['id'].isin(selected_ids)]
         limited_count = _df_plot['id'].unique().shape[0]
@@ -218,7 +218,7 @@ def plot_clustered_lineplots(
         g = sns.lineplot(
             data=_df_plot,
             ax=ax,
-            x=y_label,
+            x=x_label,
             y=band_name,
             hue='id',
             alpha=alpha,
