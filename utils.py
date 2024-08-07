@@ -281,11 +281,12 @@ def read_tif(tif_filepath:str):
     return ndarray, meta
 
 
-def add_epochs_prefix(filepath, prefix:str=''):
+def add_epochs_prefix(filepath, prefix:str='', new_folderpath=None):
     temp_prefix = f"{prefix}{int(datetime.datetime.now().timestamp() * 1000000)}_"
     temp_tif_filepath = modify_filepath(
         filepath = filepath,
         prefix = temp_prefix,
+        new_folderpath = new_folderpath,
     )
     return temp_tif_filepath
 
