@@ -8,6 +8,8 @@ import rasterio.mask
 import rasterio.merge
 import numpy as np
 import pandas as pd
+import multiprocessing as mp
+import functools
 
 
 DEFAULT_WORKING_DIR = 'esa'
@@ -103,31 +105,50 @@ def download_esa_tile(
     return download_filepath
 
 
+def download_esa_tile_by_tuple(
+    year_tile_id:tuple[int, str],
+    download_folderpath:str,
+    overwrite:bool=False,
+):
+    year, tile_id = year_tile_id
+    return download_esa_tile(
+        tile_id = tile_id,
+        year = year,
+        download_folderpath = download_folderpath,
+        overwrite = overwrite,
+    )
+
+
 def download_esa_tiles(
     tile_ids:list[str],
     years:list[int],
     download_folderpath:str,
     overwrite:bool=False,
+    njobs:int = mp.cpu_count() - 2,
 ):
-    data = {
-        YEAR_COL: [],
-        TILE_ID_COL: [],
-        FILEPATH_COL: [],
-    }
-    for year in years:
-        for tile_id in tile_ids:
-            filepath = download_esa_tile(
-                tile_id=tile_id,
-                year=year,
-                download_folderpath=download_folderpath,
-                overwrite=overwrite
-            )
+    year_tile_id_list_of_tuples = [
+        (year, tile_id) for year in years for tile_id in tile_ids
+    ]
 
-            data[TILE_ID_COL].append(tile_id)
-            data[YEAR_COL].append(year)
-            data[FILEPATH_COL].append(filepath)
+    download_esa_tile_by_tuple_partial = functools.partial(
+        download_esa_tile_by_tuple,
+        download_folderpath = download_folderpath,
+        overwrite = overwrite,
+    )
+
+    with mp.Pool(njobs) as p:
+        filepaths = list(tqdm.tqdm(
+            p.imap(download_esa_tile_by_tuple_partial, year_tile_id_list_of_tuples), 
+            total=len(year_tile_id_list_of_tuples)
+        ))
+
+    years, tile_ids = zip(*year_tile_id_list_of_tuples)
     
-    filepaths_df = pd.DataFrame(data=data)
+    filepaths_df = pd.DataFrame(data={
+        YEAR_COL: years,
+        TILE_ID_COL: tile_ids,
+        FILEPATH_COL: filepaths,
+    })
 
     return filepaths_df
 
@@ -172,12 +193,45 @@ def get_esa_stats(
     return agg_stats
 
 
+def get_esa_stats_by_tuple(
+    id_geometry:tuple[str, shapely.Polygon],
+    id_to_tile_ids_dict:dict,
+    years:list[int],
+    tile_year_tif_filepath_dict:dict,
+    out_keys:list[str],
+    id_col:str,
+):
+    _id, _geometry = id_geometry
+    _agg_stats = get_esa_stats(
+        geojson_epsg_4326 = _geometry.__geo_interface__,
+        tile_ids = id_to_tile_ids_dict[_id],
+        years = years,
+        tile_year_tif_filepath_dict = tile_year_tif_filepath_dict,
+    )
+
+    out = {
+        id_col: _id,
+        'geometry': _geometry,
+    }
+    
+    for key in out_keys:
+        if key in [id_col, 'geometry']:
+            continue
+        elif key not in _agg_stats.keys():
+            out[key] = 0
+        else:
+            out[key] = _agg_stats[key]
+    
+    return out
+
+
 def generate_esa_raster_stats_gdf(
     shapes_gdf:gpd.GeoDataFrame,
     id_col:str,
     years:list[int],
     overwrite:bool = False,
     working_dir:str = DEFAULT_WORKING_DIR,
+    njobs:int = mp.cpu_count() - 2,
 ):
     invalid_years = list(set(years) - set(VALID_YEARS))
 
@@ -191,52 +245,56 @@ def generate_esa_raster_stats_gdf(
 
     tile_ids = _sjoin_gdf[TILE_ID_COL].unique()
 
+    print('Downloading ESA tiles')
     filepaths_df = download_esa_tiles(
         tile_ids = tile_ids,
         years = years,
         download_folderpath = os.path.join(working_dir, 'tile'),
         overwrite = overwrite,
+        njobs = njobs,
     )
 
-    id_to_grids_dict = _sjoin_gdf.groupby(id_col)[TILE_ID_COL].apply(list).to_dict()
+    id_to_tile_ids_dict = _sjoin_gdf.groupby(id_col)[TILE_ID_COL].apply(list).to_dict()
 
     tile_year_tif_filepath_dict = dict(zip(
         zip(filepaths_df[TILE_ID_COL], filepaths_df[YEAR_COL]), 
         filepaths_df[FILEPATH_COL]
     ))
 
-    data = {}
-    data[id_col] = []
-    data['geometry'] = []
+    out_keys = [
+        id_col, 'geometry'
+    ]
 
     for esa_id in ESA_LEGEND.keys():
         for year in years:
-            data[esa_id_year_token(esa_id=esa_id, year=year)] = []
+            out_keys.append(esa_id_year_token(esa_id=esa_id, year=year))
 
     _shapes_gdf = shapes_gdf.to_crs(EPSG_4326)
 
-    for index, row in tqdm.tqdm(_shapes_gdf.iterrows(), total=_shapes_gdf.shape[0]):
-        _id = row[id_col]
-        _geometry = row['geometry']
+    id_geometry_list_of_tuples = list(zip(
+        _shapes_gdf[id_col],
+        _shapes_gdf['geometry'],
+    ))
 
-        tile_ids = id_to_grids_dict[_id]
-        
-        data[id_col].append(_id)
-        data['geometry'].append(_geometry)
-        _agg_stats = get_esa_stats(
-            geojson_epsg_4326=_geometry.__geo_interface__,
-            tile_ids=tile_ids,
-            years=years,
-            tile_year_tif_filepath_dict=tile_year_tif_filepath_dict,
-        )
-        for col in data.keys():
-            if col in [id_col, 'geometry']:
-                continue
-            elif col not in _agg_stats.keys():
-                data[col].append(0)
-            else:
-                data[col].append(_agg_stats[col])
-        
-    esa_raster_stats_gdf = gpd.GeoDataFrame(data=data, crs=EPSG_4326)
+    print('Computing ESA stats')
+    get_esa_stats_by_tuple_partial = functools.partial(
+        get_esa_stats_by_tuple,
+        id_to_tile_ids_dict = id_to_tile_ids_dict,
+        years = years,
+        tile_year_tif_filepath_dict = tile_year_tif_filepath_dict,
+        out_keys = out_keys,
+        id_col = id_col,
+    )
 
-    return esa_raster_stats_gdf
+    with mp.Pool(njobs) as p:
+        out_list = list(tqdm.tqdm(
+            p.imap(get_esa_stats_by_tuple_partial, id_geometry_list_of_tuples), 
+            total=len(id_geometry_list_of_tuples)
+        ))
+
+    esa_stats_gdf = gpd.GeoDataFrame(
+        pd.DataFrame.from_records(out_list),
+        crs = EPSG_4326
+    )
+
+    return esa_stats_gdf
