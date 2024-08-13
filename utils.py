@@ -1,6 +1,7 @@
 import rasterio
 import rasterio.merge
 import rasterio.mask
+import rasterio.warp
 import numpy as np
 import os
 import geopandas as gpd
@@ -131,6 +132,52 @@ def crop_tif(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
     })
 
     return out_image, out_meta
+
+
+def resample_tif(
+    ref_filepath:str,
+    src_filepath:str,
+    dst_filepath:str,
+    resampling = rasterio.warp.Resampling.average,
+    src_nodata = None,
+    dst_nodata = None,
+    dst_dtype = None,
+):
+    """
+    To warp one tif to match another's dimension
+    """
+    with rasterio.open(ref_filepath) as ref:
+        ref_meta = ref.meta.copy()
+    
+    with rasterio.open(src_filepath) as src:
+        src_meta = src.meta.copy()
+        src_image = src.read(1)
+
+    if src_nodata is None:
+        src_nodata = src_meta['nodata']
+
+    if dst_nodata is None:
+        ref_meta['nodata'] = src_nodata
+
+    if dst_dtype is None:
+        ref_meta['dtype'] = src_meta['dtype']
+
+    dst_image = np.zeros((ref_meta['height'], ref_meta['width']), dtype=ref_meta['dtype'])
+    
+    rasterio.warp.reproject(
+        source = src_image,
+        destination = dst_image,
+        src_transform = src_meta['transform'],
+        dst_transform = ref_meta['transform'],
+        src_nodata = src_nodata,
+        dst_nodata = dst_nodata,
+        src_crs = src_meta['crs'],
+        dst_crs = ref_meta['crs'],
+        resampling = resampling,
+    )
+
+    with rasterio.open(dst_filepath, 'w', **ref_meta) as dst:
+        dst.write(np.expand_dims(dst_image, axis=0))
 
 
 def plot_clustered_lineplots(
