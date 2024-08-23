@@ -114,13 +114,19 @@ def coregister(
         dst.write(out_image)
 
 
-def crop_tif(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
+def crop_tif(
+    src_filepath:str, 
+    shapes_gdf:gpd.GeoDataFrame,
+    nodata = None,
+):
     with rasterio.open(src_filepath) as src:
         out_meta = src.meta
+        if nodata is None:
+            nodata = out_meta['nodata']
         src_crs_shapes_gdf = shapes_gdf.to_crs(src.crs)
         shapes = src_crs_shapes_gdf['geometry'].to_list()
         out_image, out_transform = rasterio.mask.mask(
-            src, shapes, crop=True, nodata=out_meta['nodata']
+            src, shapes, crop=True, nodata=nodata
         )
         
     out_meta.update({
@@ -129,6 +135,7 @@ def crop_tif(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
         "width": out_image.shape[2],
         "transform": out_transform,
         "compress": "lzw",
+        "nodata": nodata,
     })
 
     return out_image, out_meta
