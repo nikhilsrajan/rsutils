@@ -118,6 +118,7 @@ def crop_tif(
     src_filepath:str, 
     shapes_gdf:gpd.GeoDataFrame,
     nodata = None,
+    all_touched:bool = False,
 ):
     with rasterio.open(src_filepath) as src:
         out_meta = src.meta
@@ -126,7 +127,7 @@ def crop_tif(
         src_crs_shapes_gdf = shapes_gdf.to_crs(src.crs)
         shapes = src_crs_shapes_gdf['geometry'].to_list()
         out_image, out_transform = rasterio.mask.mask(
-            src, shapes, crop=True, nodata=nodata
+            src, shapes, crop=True, nodata=nodata, all_touched=all_touched,
         )
         
     out_meta.update({
