@@ -27,6 +27,24 @@ def get_default_args(func):
     }
 
 
+def driver_specific_meta_updates(meta, driver:str=None):
+    if driver is None:
+        driver = meta["driver"]
+    if driver == "GTiff":
+        meta.update({
+            "driver": "GTiff",
+            "compress": "lzw",
+        })
+    elif driver == "JP2OpenJPEG":
+        # https://github.com/rasterio/rasterio/issues/1677#issuecomment-488597072
+        meta.update({
+            "driver": "JP2OpenJPEG",
+            'QUALITY': '100',
+            'REVERSIBLE': 'YES',
+        })
+    return meta
+
+
 def keep_file_by_ext(
     filepath:str,
     ignore_extensions:list[str]=None,
@@ -64,13 +82,21 @@ def get_all_files_in_folder(
     return filepaths
 
 
-def modify_filepath(filepath, prefix='', suffix='', new_folderpath:str=None):
+def modify_filepath(
+    filepath:str, 
+    prefix:str='', 
+    suffix:str='', 
+    new_folderpath:str=None, 
+    new_ext:str=None,
+):
     folderpath, filename = os.path.split(filepath)
     if new_folderpath is not None:
         folderpath = new_folderpath
     filename_splits = filename.split('.')
     filename = filename_splits[0]
     ext = '.'.join(filename_splits[1:])
+    if new_ext is not None:
+        ext = new_ext
     return os.path.join(folderpath,f'{prefix}{filename}{suffix}.{ext}')
 
 
@@ -107,8 +133,9 @@ def coregister(
         'height': out_image.shape[1],
         'width': out_image.shape[2],
         'transform': out_transform,
-        'compress':'lzw',
     })
+
+    out_meta = driver_specific_meta_updates(meta=out_meta)
 
     with rasterio.open(dst_filepath, 'w', **out_meta) as dst:
         dst.write(out_image)
@@ -136,6 +163,8 @@ def crop_tif(
         "transform": out_transform,
         "nodata": nodata,
     })
+
+    out_meta = driver_specific_meta_updates(meta=out_meta)
 
     return out_image, out_meta
 
@@ -181,6 +210,8 @@ def resample_tif(
         dst_crs = ref_meta['crs'],
         resampling = resampling,
     )
+
+    ref_meta = driver_specific_meta_updates(meta=ref_meta, driver=src_meta['driver'])
 
     with rasterio.open(dst_filepath, 'w', **ref_meta) as dst:
         dst.write(np.expand_dims(dst_image, axis=0))
