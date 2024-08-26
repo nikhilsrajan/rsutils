@@ -131,11 +131,9 @@ def crop_tif(
         )
         
     out_meta.update({
-        "driver": "GTiff",
         "height": out_image.shape[1],
         "width": out_image.shape[2],
         "transform": out_transform,
-        "compress": "lzw",
         "nodata": nodata,
     })
 
