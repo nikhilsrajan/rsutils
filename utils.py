@@ -14,7 +14,9 @@ import shapely
 import shapely.ops
 import datetime
 import gzip
-import shutil
+import shutil    
+import random
+import string
 
 
 def get_default_args(func):
@@ -367,8 +369,17 @@ def read_tif(tif_filepath:str):
     return ndarray, meta
 
 
+def get_epochs_str(add_random_alnum:bool=True, length:int=5):
+    random_alnum = ''
+    if add_random_alnum:
+        random_alnum = ''.join(random.choice(
+            string.ascii_uppercase + string.ascii_lowercase + string.digits
+        ) for _ in range(length))
+    return f"{int(datetime.datetime.now().timestamp() * 1000000)}{random_alnum}"
+
+
 def add_epochs_prefix(filepath, prefix:str='', new_folderpath=None):
-    temp_prefix = f"{prefix}{int(datetime.datetime.now().timestamp() * 1000000)}_"
+    temp_prefix = f"{prefix}{get_epochs_str()}_"
     temp_tif_filepath = modify_filepath(
         filepath = filepath,
         prefix = temp_prefix,
