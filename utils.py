@@ -50,6 +50,8 @@ def keep_file_by_ext(
     ignore_extensions:list[str]=None,
     keep_extensions:list[str]=None,
 ):
+    if ignore_extensions is None and keep_extensions is None:
+        return True
     ignore_extension_present = False
     if ignore_extensions is not None:
         for ext in ignore_extensions:
