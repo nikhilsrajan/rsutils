@@ -339,6 +339,28 @@ def get_bounds_gdf(shapes_gdf:gpd.GeoDataFrame):
     return bounds_gdf
 
 
+def get_bounds_gdf_from_image(
+    filepath:str,
+):
+    with rasterio.open(filepath) as src:
+        crs = src.crs
+        bounds = src.bounds
+    
+    return gpd.GeoDataFrame(
+        data = {
+            'geometry': [
+                shapely.Polygon([
+                    [bounds.left, bounds.bottom],
+                    [bounds.right, bounds.bottom],
+                    [bounds.right, bounds.top],
+                    [bounds.left, bounds.top],
+                ])
+            ]
+        },
+        crs = crs
+    )
+
+
 def get_actual_bounds_gdf(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
     bounds_gdf = get_bounds_gdf(shapes_gdf=shapes_gdf)
     out_image, out_meta = crop_tif(src_filepath=src_filepath, shapes_gdf=bounds_gdf)
