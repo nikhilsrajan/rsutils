@@ -205,10 +205,11 @@ def resample_tif(
     ref_meta = driver_specific_meta_updates(meta=ref_meta, driver=src_meta['driver'])
     ref_meta['count'] = src_meta['count']
 
+
     dst_image = np.full(
         (ref_meta['count'], ref_meta['height'], ref_meta['width']), 
         dtype = ref_meta['dtype'],
-        fill_value = ref_meta['nodata'],
+        fill_value = ref_meta['nodata'] if ref_meta['nodata'] is not None else 0,
     )
 
     for i in range(ref_meta['count']):
