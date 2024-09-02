@@ -190,7 +190,8 @@ def resample_tif(
     
     with rasterio.open(src_filepath) as src:
         src_meta = src.meta.copy()
-        src_image = src.read(1)
+        src_image = src.read()
+        src_desc = src.descriptions
 
     if src_nodata is None:
         src_nodata = src_meta['nodata']
@@ -201,24 +202,31 @@ def resample_tif(
     if dst_dtype is None:
         ref_meta['dtype'] = src_meta['dtype']
 
-    dst_image = np.zeros((ref_meta['height'], ref_meta['width']), dtype=ref_meta['dtype'])
-    
-    rasterio.warp.reproject(
-        source = src_image,
-        destination = dst_image,
-        src_transform = src_meta['transform'],
-        dst_transform = ref_meta['transform'],
-        src_nodata = src_nodata,
-        dst_nodata = dst_nodata,
-        src_crs = src_meta['crs'],
-        dst_crs = ref_meta['crs'],
-        resampling = resampling,
+    ref_meta = driver_specific_meta_updates(meta=ref_meta, driver=src_meta['driver'])
+    ref_meta['count'] = src_meta['count']
+
+    dst_image = np.full(
+        (ref_meta['count'], ref_meta['height'], ref_meta['width']), 
+        dtype = ref_meta['dtype'],
+        fill_value = ref_meta['nodata'],
     )
 
-    ref_meta = driver_specific_meta_updates(meta=ref_meta, driver=src_meta['driver'])
+    for i in range(ref_meta['count']):
+        rasterio.warp.reproject(
+            source = src_image[i],
+            destination = dst_image[i],
+            src_transform = src_meta['transform'],
+            dst_transform = ref_meta['transform'],
+            src_nodata = src_nodata,
+            dst_nodata = ref_meta['nodata'],
+            src_crs = src_meta['crs'],
+            dst_crs = ref_meta['crs'],
+            resampling = resampling,
+        )
 
     with rasterio.open(dst_filepath, 'w', **ref_meta) as dst:
-        dst.write(np.expand_dims(dst_image, axis=0))
+        dst.descriptions = src_desc
+        dst.write(dst_image)
 
 
 def plot_clustered_lineplots(
