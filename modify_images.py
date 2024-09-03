@@ -97,10 +97,7 @@ def modify_images(
                 total=len(src_filepath_dst_filepath_tuples)
             ))
         else:
-            successes = list(
-                p.imap(_modify_image_by_tuple_partial, src_filepath_dst_filepath_tuples), 
-                total=len(src_filepath_dst_filepath_tuples)
-            )
+            successes = list(p.imap(_modify_image_by_tuple_partial, src_filepath_dst_filepath_tuples))
     
     return successes
 
