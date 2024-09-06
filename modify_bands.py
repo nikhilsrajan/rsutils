@@ -7,6 +7,21 @@ from . import utils
 from . import utils_preprocess
 
 
+INDEX_COMPUTE_REQUIREMENTS = {
+            'NDVI': ['B04','B08'],
+      'NDWI_green': ['B03','B08'],
+       'NDWI_blue': ['B02','B08'],
+            'NDRE': ['B05','B08'],
+        'LSWI_B11': ['B08','B11'],
+        'LSWI_B12': ['B08','B12'],
+            'GCVI': ['B08','B03'],
+            'SAVI': ['B08','B04'],
+             'BSI': ['B02','B04','B08','B11'],
+    'NDTI_tillage': ['B11','B12'],
+            'PSRI': ['B04','B02','B06']
+}
+
+
 def modify_bands_chunkwise(
     bands:np.ndarray,
     band_indices:dict,
@@ -39,6 +54,90 @@ def modify_bands(
         if (print_messages):
             print(generate_preprocess_log_from_single_sequence(func = func,kwargs=kwargs))
         bands, band_indices = func(bands=bands, band_indices=band_indices, **kwargs)
+    return bands, band_indices
+
+
+def compute_bands(
+    bands:np.ndarray,
+    band_indices:dict,
+    bands_to_compute:list[str],
+):
+    for band in bands_to_compute:
+        if band not in INDEX_COMPUTE_REQUIREMENTS.keys():
+            raise NotImplementedError(f'{band} computation not implemented.')
+        required_bands = INDEX_COMPUTE_REQUIREMENTS[band]
+        for req_band in required_bands:
+            if req_band not in set(band_indices.keys()):
+                raise ValueError(f'{req_band} not present for {band} computation.')
+            
+    for band in bands_to_compute:
+        if band == 'NDVI':
+            red = bands[:,:,:,:,band_indices['B04']]
+            nir = bands[:,:,:,:,band_indices['B08']]
+            NDVI = (nir - red) / (nir + red)
+            new_computed_band = NDVI
+        elif band == 'NDWI_green':
+            # https://github.com/karimmamer/CropDetectionDL/blob/c81e556a0b025a6c2b5bb819039cb06b04017677/main.py#L81
+            nir = bands[:,:,:,:,band_indices['B08']]
+            b03 = bands[:,:,:,:,band_indices['B03']]
+            NDWI_green = (b03 - nir) / (b03 + nir)
+            new_computed_band = NDWI_green
+        elif band == 'NDWI_blue':
+            # https://github.com/karimmamer/CropDetectionDL/blob/c81e556a0b025a6c2b5bb819039cb06b04017677/main.py#L82
+            nir = bands[:,:,:,:,band_indices['B08']]
+            b02 = bands[:,:,:,:,band_indices['B02']]
+            NDWI_blue = (b02 - nir) / (b02 + nir)
+            new_computed_band = NDWI_blue
+        elif band == 'NDRE':
+            nir = bands[:,:,:,:,band_indices['B08']]    
+            red_edge = bands[:,:,:,:,band_indices['B05']]
+            NDRE = (nir - red_edge)/(nir + red_edge)
+            new_computed_band = NDRE
+        elif band == 'LSWI_B11':
+            nir = bands[:,:,:,:,band_indices['B08']]
+            swir = bands[:,:,:,:,band_indices['B11']]
+            LSWI = (nir - swir)/(nir + swir)
+            new_computed_band = LSWI
+        elif band == 'LSWI_B12':
+            nir = bands[:,:,:,:,band_indices['B08']]
+            swir = bands[:,:,:,:,band_indices['B12']]
+            LSWI = (nir - swir)/(nir + swir)
+            new_computed_band = LSWI
+        elif band == 'GCVI':
+            nir = bands[:,:,:,:,band_indices['B08']]
+            green = bands[:,:,:,:,band_indices['B03']]
+            GCVI = (nir/green) - 1
+            new_computed_band = GCVI
+        elif band == 'SAVI':
+            nir = bands[:,:,:,:,band_indices['B08']]
+            red = bands[:,:,:,:,band_indices['B04']]
+            L = 0.48 
+            SAVI = (nir - red) * (1 + L)/(nir + red + L)
+            new_computed_band = SAVI
+        elif band == 'BSI':
+            red = bands[:,:,:,:,band_indices['B04']]  
+            swir = bands[:,:,:,:,band_indices['B11']]
+            blue = bands[:,:,:,:,band_indices['B02']]
+            nir = bands[:,:,:,:,band_indices['B08']]
+            BSI = ((red+swir) - (nir + blue)) / ((red + swir) + (nir + blue))
+            new_computed_band = BSI
+        elif band == 'PSRI':
+            # https://onlinelibrary.wiley.com/doi/epdf/10.1034/j.1399-3054.1999.106119.x
+            p_678 = bands[:,:,:,:,band_indices['B04']]
+            p_500 = bands[:,:,:,:,band_indices['B02']]
+            p_750 = bands[:,:,:,:,band_indices['B06']]
+            PSRI = (p_678 - p_500) / p_750
+            new_computed_band = PSRI
+        elif band == 'NDTI_tillage':
+            swir = bands[:,:,:,:,band_indices['B11']]
+            swir2 = bands[:,:,:,:,band_indices['B12']]
+            NDTI_tillage = (swir - swir2)/(swir + swir2)
+            new_computed_band = NDTI_tillage
+        else:
+            raise NotImplementedError(f'{band} computation not implemented.')
+        bands = np.concatenate([bands, np.expand_dims(new_computed_band, axis=-1)], axis=-1)
+        band_indices[band] = max(band_indices.values()) + 1
+
     return bands, band_indices
 
 
