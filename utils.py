@@ -400,17 +400,28 @@ def read_tif(tif_filepath:str):
     return ndarray, meta
 
 
+def get_random_alnum_str(length:int=5):
+    return ''.join(random.choice(
+        string.ascii_uppercase + string.ascii_lowercase + string.digits
+    ) for _ in range(length))
+
+
 def get_epochs_str(add_random_alnum:bool=True, length:int=5):
     random_alnum = ''
     if add_random_alnum:
-        random_alnum = ''.join(random.choice(
-            string.ascii_uppercase + string.ascii_lowercase + string.digits
-        ) for _ in range(length))
+        random_alnum = get_random_alnum_str(length=length)
     return f"{int(datetime.datetime.now().timestamp() * 1000000)}{random_alnum}"
 
 
-def add_epochs_prefix(filepath, prefix:str='', new_folderpath=None):
-    temp_prefix = f"{prefix}{get_epochs_str()}_"
+def add_epochs_prefix(
+    filepath, 
+    prefix:str='', 
+    new_folderpath=None, 
+    add_random_alnum:bool=True, 
+    length:int=5,
+):
+    epoch_str = get_epochs_str(add_random_alnum=add_random_alnum, length=length)
+    temp_prefix = f"{prefix}{epoch_str}_"
     temp_tif_filepath = modify_filepath(
         filepath = filepath,
         prefix = temp_prefix,
