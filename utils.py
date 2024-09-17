@@ -329,7 +329,8 @@ def plot_clustered_lineplots(
         g.set_title(f'crop: {crop_name}, cluster_id: {cluster_number}, count: {count}')
         g.grid()
 
-        g.set_xticklabels(g.get_xticklabels(), rotation=x_label_rotation)
+        if x_label_rotation != 0:
+            g.set_xticklabels(g.get_xticklabels(), rotation=x_label_rotation)
 
     while j < nrows:
         fig.delaxes(axs[j][i])
