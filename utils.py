@@ -248,6 +248,7 @@ def plot_clustered_lineplots(
     random_state:int=42,
     x_label:str='dates',
     cluster_id_to_color_map:dict=None,
+    x_label_rotation:float = 0,
 ):
     n_points, n_timestamps = timeseries.shape
 
@@ -327,6 +328,8 @@ def plot_clustered_lineplots(
         g.set_ylim([y_min, y_max])
         g.set_title(f'crop: {crop_name}, cluster_id: {cluster_number}, count: {count}')
         g.grid()
+
+        g.set_xticklabels(g.get_xticklabels(), rotation=x_label_rotation)
 
     while j < nrows:
         fig.delaxes(axs[j][i])
