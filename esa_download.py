@@ -16,9 +16,9 @@ DEFAULT_WORKING_DIR = 'esa'
 
 VALID_YEARS = [2020, 2021]
 
-TILE_ID_COL = 'll_tile'
-YEAR_COL = 'year'
-FILEPATH_COL = 'filepath'
+COL_TILE_ID = 'll_tile'
+COL_YEAR = 'year'
+COL_FILEPATH = 'filepath'
 EPSG_4326 = 'epsg:4326'
 
 # source: https://esa-worldcover.org/en/data-access
@@ -71,7 +71,7 @@ def get_intersecting_tile_ids(
     polygon = shapely.geometry.shape(geojson_epsg_4326)
     esa_grids_gdf = get_esa_grids_gdf(working_dir=working_dir)
     intersecting_tiles_gdf = esa_grids_gdf[esa_grids_gdf.intersects(polygon)]
-    return intersecting_tiles_gdf[TILE_ID_COL].to_list()
+    return intersecting_tiles_gdf[COL_TILE_ID].to_list()
 
 
 def download_esa_tile(
@@ -145,9 +145,9 @@ def download_esa_tiles(
     years, tile_ids = zip(*year_tile_id_list_of_tuples)
     
     filepaths_df = pd.DataFrame(data={
-        YEAR_COL: years,
-        TILE_ID_COL: tile_ids,
-        FILEPATH_COL: filepaths,
+        COL_YEAR: years,
+        COL_TILE_ID: tile_ids,
+        COL_FILEPATH: filepaths,
     })
 
     return filepaths_df
@@ -243,7 +243,7 @@ def generate_esa_raster_stats_gdf(
 
     _sjoin_gdf =  gpd.sjoin(_shapes_gdf, esa_grids_gdf)
 
-    tile_ids = _sjoin_gdf[TILE_ID_COL].unique()
+    tile_ids = _sjoin_gdf[COL_TILE_ID].unique()
 
     print('Downloading ESA tiles')
     filepaths_df = download_esa_tiles(
@@ -254,11 +254,11 @@ def generate_esa_raster_stats_gdf(
         njobs = njobs,
     )
 
-    id_to_tile_ids_dict = _sjoin_gdf.groupby(id_col)[TILE_ID_COL].apply(list).to_dict()
+    id_to_tile_ids_dict = _sjoin_gdf.groupby(id_col)[COL_TILE_ID].apply(list).to_dict()
 
     tile_year_tif_filepath_dict = dict(zip(
-        zip(filepaths_df[TILE_ID_COL], filepaths_df[YEAR_COL]), 
-        filepaths_df[FILEPATH_COL]
+        zip(filepaths_df[COL_TILE_ID], filepaths_df[COL_YEAR]), 
+        filepaths_df[COL_FILEPATH]
     ))
 
     out_keys = [
