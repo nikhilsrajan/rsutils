@@ -64,7 +64,7 @@ def get_esa_grids_gdf(working_dir:str=DEFAULT_WORKING_DIR)->gpd.GeoDataFrame:
     return esa_grids_gdf
 
 
-def get_intersecting_tile_ids(
+def get_intersecting_tile_ids_single(
     geojson_epsg_4326:dict,
     working_dir:str=None,
 )->list[str]:
@@ -225,7 +225,24 @@ def get_esa_stats_by_tuple(
     return out
 
 
-def generate_esa_raster_stats_gdf(
+def get_intersecting_tile_ids(
+    shapes_gdf:gpd.GeoDataFrame,
+    id_col:str,
+    working_dir:str = DEFAULT_WORKING_DIR,
+):
+    _shapes_gdf = shapes_gdf.to_crs(EPSG_4326)
+    esa_grids_gdf = get_esa_grids_gdf(working_dir=working_dir)
+
+    _sjoin_gdf =  gpd.sjoin(_shapes_gdf, esa_grids_gdf)
+
+    tile_ids = _sjoin_gdf[TILE_ID_COL].unique()
+
+    id_to_tile_ids_dict = _sjoin_gdf.groupby(id_col)[TILE_ID_COL].apply(list).to_dict()
+
+    return tile_ids, id_to_tile_ids_dict
+
+
+def download_intersecting_tiles(
     shapes_gdf:gpd.GeoDataFrame,
     id_col:str,
     years:list[int],
@@ -238,12 +255,11 @@ def generate_esa_raster_stats_gdf(
     if len(invalid_years) > 0:
         raise ValueError(f'Invalid years found: {invalid_years}')
 
-    _shapes_gdf = shapes_gdf.to_crs(EPSG_4326)
-    esa_grids_gdf = get_esa_grids_gdf(working_dir=working_dir)
-
-    _sjoin_gdf =  gpd.sjoin(_shapes_gdf, esa_grids_gdf)
-
-    tile_ids = _sjoin_gdf[TILE_ID_COL].unique()
+    tile_ids, id_to_tile_ids_dict = \
+    get_intersecting_tile_ids(
+        shapes_gdf = shapes_gdf,
+        id_col = id_col,
+    )
 
     print('Downloading ESA tiles')
     filepaths_df = download_esa_tiles(
@@ -254,7 +270,26 @@ def generate_esa_raster_stats_gdf(
         njobs = njobs,
     )
 
-    id_to_tile_ids_dict = _sjoin_gdf.groupby(id_col)[TILE_ID_COL].apply(list).to_dict()
+    return id_to_tile_ids_dict, filepaths_df
+
+
+def generate_esa_raster_stats_gdf(
+    shapes_gdf:gpd.GeoDataFrame,
+    id_col:str,
+    years:list[int],
+    overwrite:bool = False,
+    working_dir:str = DEFAULT_WORKING_DIR,
+    njobs:int = mp.cpu_count() - 2,
+):
+    id_to_tile_ids_dict, filepaths_df = \
+    download_intersecting_tiles(
+        shapes_gdf = shapes_gdf,
+        id_col = id_col,
+        years = years,
+        overwrite = overwrite,
+        working_dir = working_dir,
+        njobs = njobs,
+    )
 
     tile_year_tif_filepath_dict = dict(zip(
         zip(filepaths_df[TILE_ID_COL], filepaths_df[YEAR_COL]), 

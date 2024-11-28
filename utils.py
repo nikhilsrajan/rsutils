@@ -173,10 +173,9 @@ def crop_tif(
     return out_image, out_meta
 
 
-def resample_tif(
-    ref_filepath:str,
+def resample_tif_inplace(
     src_filepath:str,
-    dst_filepath:str,
+    ref_meta:dict,
     resampling = rasterio.warp.Resampling.average,
     src_nodata = None,
     dst_nodata = None,
@@ -185,9 +184,6 @@ def resample_tif(
     """
     To warp one tif to match another's dimension
     """
-    with rasterio.open(ref_filepath) as ref:
-        ref_meta = ref.meta.copy()
-    
     with rasterio.open(src_filepath) as src:
         src_meta = src.meta.copy()
         src_image = src.read()
@@ -201,10 +197,11 @@ def resample_tif(
 
     if dst_dtype is None:
         ref_meta['dtype'] = src_meta['dtype']
+    else:
+        ref_meta['dtype'] = dst_dtype
 
     ref_meta = driver_specific_meta_updates(meta=ref_meta, driver=src_meta['driver'])
     ref_meta['count'] = src_meta['count']
-
 
     dst_image = np.full(
         (ref_meta['count'], ref_meta['height'], ref_meta['width']), 
@@ -224,6 +221,31 @@ def resample_tif(
             dst_crs = ref_meta['crs'],
             resampling = resampling,
         )
+    
+    return dst_image, src_desc
+
+
+def resample_tif(
+    ref_filepath:str,
+    src_filepath:str,
+    dst_filepath:str,
+    resampling = rasterio.warp.Resampling.average,
+    src_nodata = None,
+    dst_nodata = None,
+    dst_dtype = None,
+):
+    with rasterio.open(ref_filepath) as ref:
+        ref_meta = ref.meta.copy()
+
+    dst_image, src_desc \
+    = resample_tif_inplace(
+        src_filepath = src_filepath,
+        ref_meta = ref_meta,
+        resampling = resampling,
+        src_nodata = src_nodata,
+        dst_nodata = dst_nodata,
+        dst_dtype = dst_dtype,
+    )
 
     with rasterio.open(dst_filepath, 'w', **ref_meta) as dst:
         dst.descriptions = src_desc

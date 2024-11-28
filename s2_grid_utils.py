@@ -100,6 +100,13 @@ def get_id_from_latlon(lat:float, lon:float, grid_size_km:float=5, res:int=None,
     return grid_id
 
 
+def get_latlon_from_id(s2_grid_id:str):
+    lat, lon = s2cell.token_to_lat_lon(
+        token = s2_grid_id
+    )
+    return lat, lon
+
+
 def get_grid_geometry_from_latlon(
     lat:float, 
     lon:float,
