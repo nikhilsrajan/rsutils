@@ -26,8 +26,10 @@ def modify_image(
     sequence:list,
     working_dir:str = None,
     delete_temp_files:bool = True,
+    raise_error:bool = True,
 ):
     temp_src_filepath = src_filepath
+    failed = False
 
     for func, kwargs in sequence:
         process_name = func.__qualname__
@@ -37,11 +39,18 @@ def modify_image(
             new_folderpath = working_dir,
         )
 
-        func(
-            src_filepath = temp_src_filepath, 
-            dst_filepath = temp_dst_filepath, 
-            **kwargs,
-        )
+        try:
+            func(
+                src_filepath = temp_src_filepath, 
+                dst_filepath = temp_dst_filepath, 
+                **kwargs,
+            )
+        except Exception as e:
+            if raise_error:
+                raise e
+            else:
+                failed = True
+                break
 
         if delete_temp_files and src_filepath != temp_src_filepath:
             os.remove(temp_src_filepath)
@@ -49,18 +58,20 @@ def modify_image(
 
         temp_src_filepath = temp_dst_filepath
 
-    dst_folderpath = os.path.split(dst_filepath)[0]
-    os.makedirs(dst_folderpath, exist_ok=True)
-    os.rename(temp_dst_filepath, dst_filepath)
-    delete_aux_xml(temp_dst_filepath)
+    if not failed:
+        dst_folderpath = os.path.split(dst_filepath)[0]
+        os.makedirs(dst_folderpath, exist_ok=True)
+        os.rename(temp_dst_filepath, dst_filepath)
+        delete_aux_xml(temp_dst_filepath)
 
-    return os.path.exists(dst_filepath)
+    return os.path.exists(dst_filepath) and not failed
 
 
 def _modify_image_by_tuple(
     src_filepath_dst_filepath_tuple:tuple[str,str],
     sequence:list,
     working_dir:str = None,
+    raise_error:bool = True,
 ):
     src_filepath, dst_filepath = src_filepath_dst_filepath_tuple
     return modify_image(
@@ -68,6 +79,7 @@ def _modify_image_by_tuple(
         dst_filepath = dst_filepath,
         sequence = sequence,
         working_dir = working_dir,
+        raise_error = raise_error,
     )
 
 
@@ -78,6 +90,7 @@ def modify_images(
     working_dir:str = None,
     njobs:int = mp.cpu_count() - 2,
     print_messages:bool = True,
+    raise_error:bool = True,
 ):
     if len(src_filepaths) != len(dst_filepaths):
         raise ValueError('Size of src_filepaths and dst_filepaths do not match.')
@@ -86,6 +99,7 @@ def modify_images(
         _modify_image_by_tuple,
         sequence = sequence,
         working_dir = working_dir,
+        raise_error = raise_error,
     )
 
     src_filepath_dst_filepath_tuples = list(zip(src_filepaths, dst_filepaths))
