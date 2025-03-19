@@ -92,16 +92,22 @@ def modify_filepath(
     suffix:str='', 
     new_folderpath:str=None, 
     new_ext:str=None,
+    truncate_upto:int = None,
 ):
     folderpath, filename = os.path.split(filepath)
     if new_folderpath is not None:
         folderpath = new_folderpath
     filename_splits = filename.split('.')
     filename = filename_splits[0]
+    
+    # truncation is done since the filename gets absurdly large sometimes, too large to even create a file
+    # if truncate_upto is None, no truncation happnes
+    truncated_filename = filename[:truncate_upto] 
+
     ext = '.'.join(filename_splits[1:])
     if new_ext is not None:
         ext = new_ext
-    return os.path.join(folderpath,f'{prefix}{filename}{suffix}.{ext}')
+    return os.path.join(folderpath,f'{prefix}{truncated_filename}{suffix}.{ext}')
 
 
 def create_zero_tif(
@@ -445,6 +451,7 @@ def add_epochs_prefix(
     new_folderpath=None, 
     add_random_alnum:bool=True, 
     length:int=5,
+    truncate_upto:int=None,
 ):
     epoch_str = get_epochs_str(add_random_alnum=add_random_alnum, length=length)
     temp_prefix = f"{prefix}{epoch_str}_"
@@ -452,6 +459,7 @@ def add_epochs_prefix(
         filepath = filepath,
         prefix = temp_prefix,
         new_folderpath = new_folderpath,
+        truncate_upto = truncate_upto,
     )
     return temp_tif_filepath
 

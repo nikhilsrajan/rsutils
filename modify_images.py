@@ -1,17 +1,21 @@
 import os
 import rasterio
+import rasterio.io
+import rasterio.mask
 import rasterio.warp
 import geopandas as gpd
 import multiprocessing as mp
 import functools
 import tqdm
+import numpy as np
+import rasterio.transform
 
 from . import utils
 
 
 """
 Logic here is that every function mandatorily takes in two inputs in the
-order -- src_filepath and dst_filepath.
+order -- data and profile.
 """
 
 def delete_aux_xml(jp2_filepath):
@@ -24,27 +28,37 @@ def modify_image(
     src_filepath:str,
     dst_filepath:str,
     sequence:list,
-    working_dir:str = None,
-    delete_temp_files:bool = True,
     raise_error:bool = True,
-):
-    temp_src_filepath = src_filepath
+):  
+    """
+    If the first function in the sequence is crop, this operation is performed
+    from src_filepath. Performing it in memory is much slower since the whole image
+    would be loaded. When cropping is performed from src_filepath, only the relevant
+    part of the image is what is loaded thus saving time.
+    """
+    first_func, first_kwargs = sequence[0]
+    if first_func == crop:
+        data, profile = utils.crop_tif(
+            src_filepath, **first_kwargs
+        )
+        sequence = sequence[1:]
+    else:
+        with rasterio.open(src_filepath) as src:
+            data = src.read()
+            profile = src.meta.copy()
+
     failed = False
 
     for func, kwargs in sequence:
-        process_name = func.__qualname__
-        temp_dst_filepath = utils.add_epochs_prefix(
-            filepath = temp_src_filepath,
-            prefix = process_name,
-            new_folderpath = working_dir,
-        )
-
         try:
-            func(
-                src_filepath = temp_src_filepath, 
-                dst_filepath = temp_dst_filepath, 
+            out_data, out_profile = func(
+                data = data, 
+                profile = profile, 
                 **kwargs,
             )
+            del data, profile
+            data = out_data
+            profile = out_profile
         except Exception as e:
             if raise_error:
                 raise e
@@ -52,17 +66,12 @@ def modify_image(
                 failed = True
                 break
 
-        if delete_temp_files and src_filepath != temp_src_filepath:
-            os.remove(temp_src_filepath)
-            delete_aux_xml(temp_src_filepath)
-
-        temp_src_filepath = temp_dst_filepath
-
     if not failed:
         dst_folderpath = os.path.split(dst_filepath)[0]
         os.makedirs(dst_folderpath, exist_ok=True)
-        os.rename(temp_dst_filepath, dst_filepath)
-        delete_aux_xml(temp_dst_filepath)
+        with rasterio.open(dst_filepath, 'w', **profile) as dst:
+            dst.write(data)
+        delete_aux_xml(dst_filepath)
 
     return os.path.exists(dst_filepath) and not failed
 
@@ -70,7 +79,6 @@ def modify_image(
 def _modify_image_by_tuple(
     src_filepath_dst_filepath_tuple:tuple[str,str],
     sequence:list,
-    working_dir:str = None,
     raise_error:bool = True,
 ):
     src_filepath, dst_filepath = src_filepath_dst_filepath_tuple
@@ -78,7 +86,6 @@ def _modify_image_by_tuple(
         src_filepath = src_filepath,
         dst_filepath = dst_filepath,
         sequence = sequence,
-        working_dir = working_dir,
         raise_error = raise_error,
     )
 
@@ -117,64 +124,112 @@ def modify_images(
 
 
 def crop(
-    src_filepath:str,
-    dst_filepath:str,
+    data:np.ndarray,
+    profile:dict,
     shapes_gdf:gpd.GeoDataFrame,
     nodata = None,
     all_touched:bool = False,
 ):
-    out_ndarray, out_meta = utils.crop_tif(
-        src_filepath = src_filepath,
-        shapes_gdf = shapes_gdf,
-        nodata = nodata,
-        all_touched = all_touched,
-    )
+    out_profile = profile.copy()
+    with rasterio.io.MemoryFile() as memfile:
+        with memfile.open(**profile) as dataset:
+            dataset.write(data)
+        
+            src_crs_shapes_gdf = shapes_gdf.to_crs(dataset.crs)
+            shapes = src_crs_shapes_gdf['geometry'].to_list()
 
-    with rasterio.open(dst_filepath, 'w', **out_meta) as dst:
-        dst.write(out_ndarray)
+            out_data, out_transform = rasterio.mask.mask(
+                dataset, shapes, crop=True, nodata=nodata, all_touched=all_touched,
+            )
+
+            out_profile.update({
+                "height": out_data.shape[1],
+                "width": out_data.shape[2],
+                "transform": out_transform,
+                "nodata": nodata,
+            })
+    
+    return out_data, out_profile
 
 
 def reproject(
-    src_filepath:str,
-    dst_filepath:str,
+    data:np.ndarray,
+    profile:dict,
     dst_crs,
     resampling = rasterio.warp.Resampling.nearest,
 ):
-    # https://rasterio.readthedocs.io/en/stable/topics/reproject.html
-    with rasterio.open(src_filepath) as src:
-        transform, width, height = rasterio.warp.calculate_default_transform(
-            src.crs, dst_crs, src.width, src.height, *src.bounds)
-        kwargs = src.meta.copy()
-        kwargs.update({
-            'crs': dst_crs,
-            'transform': transform,
-            'width': width,
-            'height': height
-        })
+    src_crs = profile['crs']
+    src_count = profile['count']
+    src_width = profile['width']
+    src_height = profile['height']
+    src_transform = profile['transform']
 
-        kwargs = utils.driver_specific_meta_updates(meta=kwargs)
+    src_bounds = rasterio.transform.array_bounds(height=src_height, width=src_width, transform=src_transform)
 
-        with rasterio.open(dst_filepath, 'w', **kwargs) as dst:
-            for i in range(1, src.count + 1):
-                rasterio.warp.reproject(
-                    source=rasterio.band(src, i),
-                    destination=rasterio.band(dst, i),
-                    src_transform=src.transform,
-                    src_crs=src.crs,
-                    dst_transform=transform,
-                    dst_crs=dst_crs,
-                    resampling=resampling)
+    transform, width, height = rasterio.warp.calculate_default_transform(
+        src_crs, dst_crs, src_width, src_height, *src_bounds)
+    
+    out_profile = profile.copy()
+    out_profile.update({
+        'crs': dst_crs,
+        'transform': transform,
+        'width': width,
+        'height': height
+    })
+
+    out_profile = utils.driver_specific_meta_updates(meta=out_profile)
+
+    out_data = np.full(
+        (src_count, height, width), 
+        dtype = profile['dtype'],
+        fill_value = profile['nodata'],
+    )
+
+    for i in range(src_count):
+        rasterio.warp.reproject(
+            source = data[i],
+            destination = out_data[i],
+            src_transform = src_transform,
+            src_crs = src_crs,
+            dst_transform = transform,
+            dst_crs = dst_crs,
+            resampling = resampling)
+    
+    return out_data, out_profile
 
 
 def resample_by_ref(
-    src_filepath:str,
-    dst_filepath:str,
+    data:np.ndarray,
+    profile:dict,
     ref_filepath:str,
     resampling = rasterio.warp.Resampling.nearest, 
 ):
-    utils.resample_tif(
-        ref_filepath = ref_filepath,
-        src_filepath = src_filepath,
-        dst_filepath = dst_filepath,
-        resampling = resampling,
+    with rasterio.open(ref_filepath) as ref:
+        out_profile = ref.meta.copy()
+
+    out_profile['nodata'] = profile['nodata']
+    out_profile['dtype'] = profile['dtype']
+
+    out_profile = utils.driver_specific_meta_updates(meta=out_profile, driver=profile['driver'])
+    out_profile['count'] = profile['count']
+
+    out_data = np.full(
+        (out_profile['count'], out_profile['height'], out_profile['width']), 
+        dtype = out_profile['dtype'],
+        fill_value = out_profile['nodata'] if out_profile['nodata'] is not None else 0,
     )
+
+    for i in range(out_profile['count']):
+        rasterio.warp.reproject(
+            source = data[i],
+            destination = out_data[i],
+            src_transform = profile['transform'],
+            dst_transform = out_profile['transform'],
+            src_nodata = profile['nodata'],
+            dst_nodata = out_profile['nodata'],
+            src_crs = profile['crs'],
+            dst_crs = out_profile['crs'],
+            resampling = resampling,
+        )
+    
+    return out_data, out_profile
