@@ -94,7 +94,6 @@ def modify_images(
     src_filepaths:list[str],
     dst_filepaths:list[str],
     sequence:list,
-    working_dir:str = None,
     njobs:int = mp.cpu_count() - 2,
     print_messages:bool = True,
     raise_error:bool = True,
@@ -105,7 +104,6 @@ def modify_images(
     _modify_image_by_tuple_partial = functools.partial(
         _modify_image_by_tuple,
         sequence = sequence,
-        working_dir = working_dir,
         raise_error = raise_error,
     )
 
