@@ -302,7 +302,7 @@ def plot_clustered_lineplots(
             timeseries, 
             np.array([cluster_ids]).T
         ], axis=1),
-        columns=['id'] + x + ['cluster_id']
+        columns=['id'] + list(x) + ['cluster_id']
     )
     _df['id'] = _df['id'].astype(int)
     _df['cluster_id'] = _df['cluster_id'].astype(int)
