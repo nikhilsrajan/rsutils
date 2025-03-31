@@ -38,10 +38,16 @@ def modify_image(
     """
     first_func, first_kwargs = sequence[0]
     if first_func == crop:
-        data, profile = utils.crop_tif(
-            src_filepath, **first_kwargs
-        )
-        sequence = sequence[1:]
+        try:
+            data, profile = utils.crop_tif(
+                src_filepath, **first_kwargs
+            )
+            sequence = sequence[1:]
+        except Exception as e:
+            if raise_error:
+                raise e
+            else:
+                failed = True
     else:
         with rasterio.open(src_filepath) as src:
             data = src.read()
@@ -49,22 +55,23 @@ def modify_image(
 
     failed = False
 
-    for func, kwargs in sequence:
-        try:
-            out_data, out_profile = func(
-                data = data, 
-                profile = profile, 
-                **kwargs,
-            )
-            del data, profile
-            data = out_data
-            profile = out_profile
-        except Exception as e:
-            if raise_error:
-                raise e
-            else:
-                failed = True
-                break
+    if not failed:
+        for func, kwargs in sequence:
+            try:
+                out_data, out_profile = func(
+                    data = data, 
+                    profile = profile, 
+                    **kwargs,
+                )
+                del data, profile
+                data = out_data
+                profile = out_profile
+            except Exception as e:
+                if raise_error:
+                    raise e
+                else:
+                    failed = True
+                    break
 
     if not failed:
         dst_folderpath = os.path.split(dst_filepath)[0]
