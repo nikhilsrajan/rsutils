@@ -110,15 +110,31 @@ def modify_filepath(
     return os.path.join(folderpath,f'{prefix}{truncated_filename}{suffix}.{ext}')
 
 
+def create_fill_tif(
+    reference_tif_filepath:str,
+    out_tif_filepath:str,
+    fill_value,
+    nodata = None,
+):
+    with rasterio.open(reference_tif_filepath) as src:
+        output_meta = src.meta.copy()
+    if nodata is not None:
+        output_meta['nodata'] = nodata
+    full_ndarray = np.full(fill_value=fill_value, shape=(1, output_meta['height'], output_meta['width']), dtype=output_meta['dtype'])
+    with rasterio.open(out_tif_filepath, 'w', **output_meta) as dst:
+        dst.write(full_ndarray)
+
+
 def create_zero_tif(
     reference_tif_filepath:str,
     zero_tif_filepath:str,
 ):
-    with rasterio.open(reference_tif_filepath) as src:
-        output_meta = src.meta.copy()
-    zero_ndarray = np.zeros(shape=(1, output_meta['height'], output_meta['width']), dtype=output_meta['dtype'])
-    with rasterio.open(zero_tif_filepath, 'w', **output_meta) as dst:
-        dst.write(zero_ndarray)
+    create_fill_tif(
+        reference_tif_filepath = reference_tif_filepath,
+        out_tif_filepath = zero_tif_filepath,
+        fill_value = 0,
+        nodata = 1,
+    )
 
 
 def coregister(
