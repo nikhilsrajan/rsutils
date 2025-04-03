@@ -24,6 +24,36 @@ def delete_aux_xml(jp2_filepath):
         os.remove(aux_xml_filepath)
 
 
+def modify_image_inplace(
+    data:np.ndarray,
+    profile:dict,
+    sequence:list,
+    raise_error:bool = True,
+) -> tuple[np.ndarray, dict]:
+    failed = False
+    for func, kwargs in sequence:
+        try:
+            out_data, out_profile = func(
+                data = data, 
+                profile = profile, 
+                **kwargs,
+            )
+            del data, profile
+            data = out_data
+            profile = out_profile
+        except Exception as e:
+            if raise_error:
+                raise e
+            else:
+                failed = True
+                break
+    if failed:
+        out_data = None
+        out_profile = None
+    
+    return out_data, out_profile
+
+
 def modify_image(
     src_filepath:str,
     dst_filepath:str,
@@ -56,22 +86,13 @@ def modify_image(
     failed = False
 
     if not failed:
-        for func, kwargs in sequence:
-            try:
-                out_data, out_profile = func(
-                    data = data, 
-                    profile = profile, 
-                    **kwargs,
-                )
-                del data, profile
-                data = out_data
-                profile = out_profile
-            except Exception as e:
-                if raise_error:
-                    raise e
-                else:
-                    failed = True
-                    break
+        out_data, out_profile = modify_image_inplace(
+            data = data,
+            profile = profile,
+            sequence = sequence,
+            raise_error = raise_error,
+        )
+        failed = out_data is None or out_profile is None
 
     if not failed:
         dst_folderpath = os.path.split(dst_filepath)[0]
@@ -127,6 +148,104 @@ def modify_images(
     
     return successes
 
+
+def _modify_image_inplace_by_tuple(
+    data_profile:tuple[np.ndarray, dict],
+    sequence:list,
+    raise_error:bool = True,
+) -> tuple[np.ndarray, dict]:
+    data, profile = data_profile
+    return modify_image_inplace(
+        data = data,
+        profile = profile,
+        sequence = sequence,
+        raise_error = raise_error,
+    )
+
+
+def modify_images_inplace(
+    data_profile_list:list[tuple[np.ndarray, dict]],
+    sequence:list,
+    njobs:int = mp.cpu_count() - 2,
+    print_messages:bool = True,
+    raise_error:bool = True,
+):
+    _modify_image_inplace_by_tuple_partial = functools.partial(
+        _modify_image_inplace_by_tuple,
+        sequence = sequence,
+        raise_error = raise_error,
+    )
+
+    with mp.Pool(njobs) as p:
+        if print_messages:
+            out_data_profile_list = list(tqdm.tqdm(
+                p.imap(_modify_image_inplace_by_tuple_partial, data_profile_list), 
+                total = len(data_profile_list)
+            ))
+        else:
+            out_data_profile_list = list(p.imap(_modify_image_inplace_by_tuple_partial, data_profile_list))
+    
+    return out_data_profile_list
+
+
+def load_image(
+    src_filepath:str,
+    shapes_gdf:gpd.GeoDataFrame = None,
+    raise_error:bool = True,
+    nodata = None,
+    all_touched:bool = True,
+) -> tuple[np.ndarray, dict]:
+    
+    data, profile = None, None
+
+    try:
+        if shapes_gdf is None:
+            with rasterio.open(src_filepath) as src:
+                data = src.read()
+                profile = src.meta.copy()
+        else:
+            data, profile = utils.crop_tif(
+                src_filepath = src_filepath, 
+                shapes_gdf = shapes_gdf,
+                nodata = nodata,
+                all_touched = all_touched,
+            )
+
+    except Exception as e:
+        if raise_error:
+            raise e
+        
+    return data, profile
+
+
+def load_images(
+    src_filepaths:list[str],
+    shapes_gdf:gpd.GeoDataFrame = None,
+    raise_error:bool = True,
+    nodata = None,
+    all_touched:bool = True,
+    njobs:int = 1,
+    print_messages:bool = True,
+):
+    load_image_partial = functools.partial(
+        load_image,
+        shapes_gdf = shapes_gdf,
+        raise_error = raise_error,
+        nodata = nodata,
+        all_touched = all_touched,
+    )
+
+    with mp.Pool(njobs) as p:
+        if print_messages:
+            data_profile_list = list(tqdm.tqdm(
+                p.imap(load_image_partial, src_filepaths), 
+                total = len(src_filepaths)
+            ))
+        else:
+            data_profile_list = list(p.imap(load_image_partial, src_filepaths))
+    
+    return data_profile_list
+            
 
 def crop(
     data:np.ndarray,
@@ -203,14 +322,13 @@ def reproject(
     return out_data, out_profile
 
 
-def resample_by_ref(
+def resample_by_ref_meta(
     data:np.ndarray,
     profile:dict,
-    ref_filepath:str,
+    ref_meta:dict,
     resampling = rasterio.warp.Resampling.nearest, 
 ):
-    with rasterio.open(ref_filepath) as ref:
-        out_profile = ref.meta.copy()
+    out_profile = ref_meta
 
     out_profile['nodata'] = profile['nodata']
     out_profile['dtype'] = profile['dtype']
@@ -238,3 +356,20 @@ def resample_by_ref(
         )
     
     return out_data, out_profile
+
+
+def resample_by_ref(
+    data:np.ndarray,
+    profile:dict,
+    ref_filepath:str,
+    resampling = rasterio.warp.Resampling.nearest, 
+):
+    with rasterio.open(ref_filepath) as ref:
+        ref_meta = ref.meta.copy()
+
+    return resample_by_ref_meta(
+        data = data,
+        profile = profile,
+        ref_meta = ref_meta,
+        resampling = resampling,
+    )

@@ -172,7 +172,7 @@ def crop_tif(
     shapes_gdf:gpd.GeoDataFrame,
     nodata = None,
     all_touched:bool = False,
-):
+) -> tuple[np.ndarray, dict]:
     with rasterio.open(src_filepath) as src:
         out_meta = src.meta
         if nodata is None:
