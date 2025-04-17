@@ -57,17 +57,17 @@ def keep_file_by_ext(
     ignore_extension_present = False
     if ignore_extensions is not None:
         for ext in ignore_extensions:
-            if filepath[-len(ext):] == ext:
+            if filepath.endswith(ext):
                 ignore_extension_present = True
                 break
     keep_extension_present = False
     if keep_extensions is not None:
         for ext in keep_extensions:
-            if filepath[-len(ext):] == ext:
+            if filepath.endswith(ext):
                 keep_extension_present = True
                 break
     ret = (ignore_extensions is not None and not ignore_extension_present) or \
-        (keep_extensions is not None and keep_extension_present)
+          (keep_extensions is not None and keep_extension_present)
     return ret
 
 
