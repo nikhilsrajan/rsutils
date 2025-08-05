@@ -85,7 +85,7 @@ def modify_image(
 
     failed = False
 
-    if not failed:
+    if not failed and len(sequence) > 0:
         out_data, out_profile = modify_image_inplace(
             data = data,
             profile = profile,
