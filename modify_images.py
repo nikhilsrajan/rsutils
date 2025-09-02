@@ -255,6 +255,10 @@ def crop(
     all_touched:bool = False,
 ):
     out_profile = profile.copy()
+
+    if nodata is None:
+        nodata = profile['nodata']
+
     with rasterio.io.MemoryFile() as memfile:
         with memfile.open(**profile) as dataset:
             dataset.write(data)
@@ -287,6 +291,10 @@ def reproject(
     src_width = profile['width']
     src_height = profile['height']
     src_transform = profile['transform']
+
+    # do nothing if crs is the same
+    if src_crs == dst_crs:
+        return data, profile
 
     src_bounds = rasterio.transform.array_bounds(height=src_height, width=src_width, transform=src_transform)
 
