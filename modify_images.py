@@ -248,9 +248,9 @@ def load_images(
 
 
 def image_to_memfile(
-    data_profile:tuple[np.ndarray, dict],
+    data:np.ndarray,
+    profile:dict,
 ):
-    data, profile = data_profile
     memfile = rasterio.io.MemoryFile()
     with memfile.open(**profile) as dataset:
         dataset.write(data)
@@ -259,17 +259,10 @@ def image_to_memfile(
 
 def images_to_memfiles(
     data_profile_list:list[tuple[np.ndarray, dict]],
-    njobs:int = 1,
-    print_messages:bool = True,
 ):
-    with mp.Pool(njobs) as p:
-        if print_messages:
-            memfiles = list(tqdm.tqdm(
-                p.imap(image_to_memfile, data_profile_list), 
-                total = len(data_profile_list)
-            ))
-        else:
-            memfiles = list(p.imap(image_to_memfile, data_profile_list))
+    memfiles = []
+    for data, profile in tqdm.tqdm(data_profile_list):
+        memfiles.append(image_to_memfile(data=data, profile=profile))
     return memfiles
 
 
