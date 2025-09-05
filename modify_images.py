@@ -262,7 +262,7 @@ def images_to_memfiles(
     data_profile_list:list[tuple[np.ndarray, dict]],
 ):
     memfiles = []
-    for data, profile in tqdm.tqdm(data_profile_list):
+    for data, profile in data_profile_list:
         memfiles.append(image_to_memfile(data=data, profile=profile))
     return memfiles
 
