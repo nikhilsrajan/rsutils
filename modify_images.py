@@ -9,6 +9,7 @@ import functools
 import tqdm
 import numpy as np
 import rasterio.transform
+import rasterio.merge
 
 from . import utils
 
@@ -400,3 +401,28 @@ def resample_by_ref(
         ref_meta = ref_meta,
         resampling = resampling,
     )
+
+
+def merge_inplace(
+    data_profile_list:list[tuple[np.ndarray, dict]],
+    nodata = None,
+):
+    merged_profile = data_profile_list[0][1].copy()
+
+    memfiles = images_to_memfiles(
+        data_profile_list = data_profile_list,
+    )
+
+    merged_data, merged_transform = rasterio.merge.merge(
+        [memfile.open() for memfile in memfiles], 
+        nodata = nodata,
+    )
+
+    merged_profile.update({
+        'count': merged_data.shape[0],
+        'height': merged_data.shape[1],
+        'width': merged_data.shape[2],
+        'transform': merged_transform,
+    })
+
+    return merged_data, merged_profile
