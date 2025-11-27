@@ -2,6 +2,7 @@ import rasterio
 import rasterio.merge
 import rasterio.mask
 import rasterio.warp
+import rasterio.transform
 import numpy as np
 import os
 import geopandas as gpd
@@ -17,6 +18,37 @@ import gzip
 import shutil    
 import random
 import string
+
+
+def get_easting_northing_array(
+    width:int,
+    height:int,
+    transform,
+    src_crs = None,
+    dst_crs = None,
+):
+    xs = np.arange(width)
+    ys = np.arange(height)
+    X, Y = np.meshgrid(xs, ys)
+    XY_flat = np.column_stack((X.ravel(), Y.ravel()))
+    eastings, northings = rasterio.transform.xy(
+        transform = transform, 
+        rows = XY_flat[:,1], 
+        cols = XY_flat[:,0], 
+        offset = 'center',
+    )
+
+    eastings_northings = np.array([(e, n) for e, n in zip(eastings, northings)])
+
+    if dst_crs is not None and src_crs is not None:
+        en_gdf = gpd.GeoDataFrame(
+            data = {'geometry': [shapely.Point(en) for en in eastings_northings]},
+            crs = src_crs
+        ).to_crs(dst_crs)
+        eastings_northings = np.array([(p.xy[0][0], p.xy[1][0]) for p in en_gdf['geometry']])
+
+    easting_northing_array = eastings_northings.reshape(*X.shape, 2)
+    return easting_northing_array
 
 
 def get_default_args(func):

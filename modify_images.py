@@ -98,6 +98,7 @@ def modify_image(
     if not failed:
         dst_folderpath = os.path.split(dst_filepath)[0]
         os.makedirs(dst_folderpath, exist_ok=True)
+        profile.update(count=data.shape[0])
         with rasterio.open(dst_filepath, 'w', **profile) as dst:
             dst.write(data)
         delete_aux_xml(dst_filepath)
@@ -273,6 +274,7 @@ def crop(
     shapes_gdf:gpd.GeoDataFrame,
     nodata = None,
     all_touched:bool = False,
+    crop:bool = True,
 ):
     out_profile = profile.copy()
 
@@ -287,7 +289,7 @@ def crop(
             shapes = src_crs_shapes_gdf['geometry'].to_list()
 
             out_data, out_transform = rasterio.mask.mask(
-                dataset, shapes, crop=True, nodata=nodata, all_touched=all_touched,
+                dataset, shapes, crop=crop, nodata=nodata, all_touched=all_touched,
             )
 
             out_profile.update({
@@ -419,6 +421,7 @@ def merge_inplace(
     )
 
     merged_profile.update({
+        'nodata': nodata,
         'count': merged_data.shape[0],
         'height': merged_data.shape[1],
         'width': merged_data.shape[2],
