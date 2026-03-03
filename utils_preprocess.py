@@ -188,3 +188,60 @@ def radar_scaling(
         band_data_copy = db_to_linear(intensity_mat_in_db=band_data_copy)
     
     return band_data_copy
+
+
+@numba.njit()
+def _find_patches(
+    array_2d:np.ndarray,
+    interest_val:int,
+    patch_height:int,
+    patch_width:int,
+    min_threshold:float = 1,
+):
+    height, width = array_2d.shape
+    patch_indices = np.full(
+        shape = ((height - patch_height + 1) * (width - patch_width + 1), 2), 
+        fill_value = -1,
+    )
+    i = 0
+    h = 0
+    while h <= height - patch_height:
+        w = 0
+        found_patch_in_row = 0
+        while w <= width - patch_width:
+            _patch = array_2d[h:h+patch_height, w:w+patch_width]
+            coverage = (_patch == interest_val).sum() / (patch_height * patch_width * 1.0)
+            if coverage >= min_threshold:
+                patch_indices[i, 0] = h
+                patch_indices[i, 1] = w
+                i += 1
+                w += patch_width
+                found_patch_in_row = 1
+            else:
+                w += 1
+        if found_patch_in_row == 1:
+            h += patch_height
+        else:
+            h += 1
+    return patch_indices
+
+
+def find_patches(
+    array_2d:np.ndarray,
+    interest_val:int,
+    patch_height:int,
+    patch_width:int,
+    min_threshold:float = 1,
+):
+    patch_indices = _find_patches(
+        array_2d = array_2d,
+        interest_val = interest_val,
+        patch_height = patch_height,
+        patch_width = patch_width,
+        min_threshold = min_threshold,
+    )
+
+    nonnan_patch_indices = patch_indices[patch_indices[:,0] != -1]
+    del patch_indices
+
+    return nonnan_patch_indices

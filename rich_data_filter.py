@@ -5,6 +5,52 @@ from . import utils_preprocess
 
 
 @numba.njit()
+def get_continuous_sum_1d(arr:np.ndarray, stop_value = 0, spot_fill:bool=True)->np.ndarray:
+    continous_sum = np.zeros(arr.shape, dtype=arr.dtype)
+
+    N = arr.shape[0]
+
+    cur_sum = 0
+    for i in numba.prange(1, N+1):
+        inv_i = N - i
+        if arr[inv_i] != stop_value:
+            cur_sum += arr[inv_i]
+            if inv_i > 0:
+                if spot_fill:
+                    if arr[inv_i - 1] == stop_value:
+                        continous_sum[inv_i] = cur_sum
+                else:
+                    continous_sum[inv_i] = cur_sum
+            else:
+                continous_sum[inv_i] = cur_sum
+        else:
+            cur_sum = 0
+
+    return continous_sum
+
+
+@numba.njit()
+def get_continuous_sum_2d(arr:np.ndarray, spot_fill:bool=True)->np.ndarray:
+    n_samples, n_timestamps = arr.shape
+    continuous_sums = np.zeros((n_samples, n_timestamps), dtype=arr.dtype)
+    for i in numba.prange(n_samples):
+        continuous_sums[i] = \
+            get_continuous_sum_1d(arr=arr[i], spot_fill=spot_fill)
+    return continuous_sums
+
+
+def get_continuous_sum(arr:np.ndarray, spot_fill:bool=True)->np.ndarray:
+    """
+    Expected arr.shape: (n0, n1, n2, ..., n_timestamps)
+    Output shape: (n0, n1, n2, ..., n_timestamps)
+    """
+    org_shape = arr.shape
+    arr_2D = utils_preprocess._flatten_2D(arr=arr)
+    continuous_sums = get_continuous_sum_2d(arr=arr_2D, spot_fill=spot_fill)
+    return continuous_sums.reshape(org_shape)
+
+
+@numba.njit()
 def get_max_continuous_ones_1d(arr:np.ndarray)->np.ndarray:
     """
     Given a 1d array of 1s and 0s, this function returns the length of the longest

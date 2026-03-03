@@ -1,6 +1,8 @@
 import rasterio
 import rasterio.merge
 import rasterio.mask
+import rasterio.warp
+import rasterio.transform
 import numpy as np
 import os
 import geopandas as gpd
@@ -11,6 +13,42 @@ import inspect
 import glob
 import shapely
 import shapely.ops
+import datetime
+import gzip
+import shutil    
+import random
+import string
+
+
+def get_easting_northing_array(
+    width:int,
+    height:int,
+    transform,
+    src_crs = None,
+    dst_crs = None,
+):
+    xs = np.arange(width)
+    ys = np.arange(height)
+    X, Y = np.meshgrid(xs, ys)
+    XY_flat = np.column_stack((X.ravel(), Y.ravel()))
+    eastings, northings = rasterio.transform.xy(
+        transform = transform, 
+        rows = XY_flat[:,1], 
+        cols = XY_flat[:,0], 
+        offset = 'center',
+    )
+
+    eastings_northings = np.array([(e, n) for e, n in zip(eastings, northings)])
+
+    if dst_crs is not None and src_crs is not None:
+        en_gdf = gpd.GeoDataFrame(
+            data = {'geometry': [shapely.Point(en) for en in eastings_northings]},
+            crs = src_crs
+        ).to_crs(dst_crs)
+        eastings_northings = np.array([(p.xy[0][0], p.xy[1][0]) for p in en_gdf['geometry']])
+
+    easting_northing_array = eastings_northings.reshape(*X.shape, 2)
+    return easting_northing_array
 
 
 def get_default_args(func):
@@ -23,25 +61,45 @@ def get_default_args(func):
     }
 
 
+def driver_specific_meta_updates(meta, driver:str=None):
+    if driver is None:
+        driver = meta["driver"]
+    if driver == "GTiff":
+        meta.update({
+            "driver": "GTiff",
+            "compress": "lzw",
+        })
+    elif driver == "JP2OpenJPEG":
+        # https://github.com/rasterio/rasterio/issues/1677#issuecomment-488597072
+        meta.update({
+            "driver": "JP2OpenJPEG",
+            'QUALITY': '100',
+            'REVERSIBLE': 'YES',
+        })
+    return meta
+
+
 def keep_file_by_ext(
     filepath:str,
     ignore_extensions:list[str]=None,
     keep_extensions:list[str]=None,
 ):
+    if ignore_extensions is None and keep_extensions is None:
+        return True
     ignore_extension_present = False
     if ignore_extensions is not None:
         for ext in ignore_extensions:
-            if filepath[-len(ext):] == ext:
+            if filepath.endswith(ext):
                 ignore_extension_present = True
                 break
     keep_extension_present = False
     if keep_extensions is not None:
         for ext in keep_extensions:
-            if filepath[-len(ext):] == ext:
+            if filepath.endswith(ext):
                 keep_extension_present = True
                 break
     ret = (ignore_extensions is not None and not ignore_extension_present) or \
-        (keep_extensions is not None and keep_extension_present)
+          (keep_extensions is not None and keep_extension_present)
     return ret
 
 
@@ -60,25 +118,55 @@ def get_all_files_in_folder(
     return filepaths
 
 
-def modify_filepath(filepath, prefix='', suffix='', new_folderpath:str=None):
+def modify_filepath(
+    filepath:str, 
+    prefix:str='', 
+    suffix:str='', 
+    new_folderpath:str=None, 
+    new_ext:str=None,
+    truncate_upto:int = None,
+):
     folderpath, filename = os.path.split(filepath)
     if new_folderpath is not None:
         folderpath = new_folderpath
     filename_splits = filename.split('.')
     filename = filename_splits[0]
+    
+    # truncation is done since the filename gets absurdly large sometimes, too large to even create a file
+    # if truncate_upto is None, no truncation happnes
+    truncated_filename = filename[:truncate_upto] 
+
     ext = '.'.join(filename_splits[1:])
-    return os.path.join(folderpath,f'{prefix}{filename}{suffix}.{ext}')
+    if new_ext is not None:
+        ext = new_ext
+    return os.path.join(folderpath,f'{prefix}{truncated_filename}{suffix}.{ext}')
+
+
+def create_fill_tif(
+    reference_tif_filepath:str,
+    out_tif_filepath:str,
+    fill_value,
+    nodata = None,
+):
+    with rasterio.open(reference_tif_filepath) as src:
+        output_meta = src.meta.copy()
+    if nodata is not None:
+        output_meta['nodata'] = nodata
+    full_ndarray = np.full(fill_value=fill_value, shape=(1, output_meta['height'], output_meta['width']), dtype=output_meta['dtype'])
+    with rasterio.open(out_tif_filepath, 'w', **output_meta) as dst:
+        dst.write(full_ndarray)
 
 
 def create_zero_tif(
     reference_tif_filepath:str,
     zero_tif_filepath:str,
 ):
-    with rasterio.open(reference_tif_filepath) as src:
-        output_meta = src.meta.copy()
-    zero_ndarray = np.zeros(shape=(1, output_meta['height'], output_meta['width']), dtype=output_meta['dtype'])
-    with rasterio.open(zero_tif_filepath, 'w', **output_meta) as dst:
-        dst.write(zero_ndarray)
+    create_fill_tif(
+        reference_tif_filepath = reference_tif_filepath,
+        out_tif_filepath = zero_tif_filepath,
+        fill_value = 0,
+        nodata = 1,
+    )
 
 
 def coregister(
@@ -103,38 +191,126 @@ def coregister(
         'height': out_image.shape[1],
         'width': out_image.shape[2],
         'transform': out_transform,
-        'compress':'lzw',
     })
+
+    out_meta = driver_specific_meta_updates(meta=out_meta)
 
     with rasterio.open(dst_filepath, 'w', **out_meta) as dst:
         dst.write(out_image)
 
 
-def crop_tif(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
+def crop_tif(
+    src_filepath:str, 
+    shapes_gdf:gpd.GeoDataFrame,
+    nodata = None,
+    all_touched:bool = False,
+) -> tuple[np.ndarray, dict]:
     with rasterio.open(src_filepath) as src:
         out_meta = src.meta
+        if nodata is None:
+            nodata = out_meta['nodata']
         src_crs_shapes_gdf = shapes_gdf.to_crs(src.crs)
         shapes = src_crs_shapes_gdf['geometry'].to_list()
         out_image, out_transform = rasterio.mask.mask(
-            src, shapes, crop=True, nodata=out_meta['nodata']
+            src, shapes, crop=True, nodata=nodata, all_touched=all_touched,
         )
         
     out_meta.update({
-        "driver": "GTiff",
         "height": out_image.shape[1],
         "width": out_image.shape[2],
         "transform": out_transform,
-        "compress": "lzw",
+        "nodata": nodata,
     })
 
+    out_meta = driver_specific_meta_updates(meta=out_meta)
+
     return out_image, out_meta
+
+
+def resample_tif_inplace(
+    src_filepath:str,
+    ref_meta:dict,
+    resampling = rasterio.warp.Resampling.average,
+    src_nodata = None,
+    dst_nodata = None,
+    dst_dtype = None,
+):
+    """
+    To warp one tif to match another's dimension
+    """
+    with rasterio.open(src_filepath) as src:
+        src_meta = src.meta.copy()
+        src_image = src.read()
+        src_desc = src.descriptions
+
+    if src_nodata is None:
+        src_nodata = src_meta['nodata']
+
+    if dst_nodata is None:
+        ref_meta['nodata'] = src_nodata
+
+    if dst_dtype is None:
+        ref_meta['dtype'] = src_meta['dtype']
+    else:
+        ref_meta['dtype'] = dst_dtype
+
+    ref_meta = driver_specific_meta_updates(meta=ref_meta, driver=src_meta['driver'])
+    ref_meta['count'] = src_meta['count']
+
+    dst_image = np.full(
+        (ref_meta['count'], ref_meta['height'], ref_meta['width']), 
+        dtype = ref_meta['dtype'],
+        fill_value = ref_meta['nodata'] if ref_meta['nodata'] is not None else 0,
+    )
+
+    for i in range(ref_meta['count']):
+        rasterio.warp.reproject(
+            source = src_image[i],
+            destination = dst_image[i],
+            src_transform = src_meta['transform'],
+            dst_transform = ref_meta['transform'],
+            src_nodata = src_nodata,
+            dst_nodata = ref_meta['nodata'],
+            src_crs = src_meta['crs'],
+            dst_crs = ref_meta['crs'],
+            resampling = resampling,
+        )
+    
+    return dst_image, src_desc
+
+
+def resample_tif(
+    ref_filepath:str,
+    src_filepath:str,
+    dst_filepath:str,
+    resampling = rasterio.warp.Resampling.average,
+    src_nodata = None,
+    dst_nodata = None,
+    dst_dtype = None,
+):
+    with rasterio.open(ref_filepath) as ref:
+        ref_meta = ref.meta.copy()
+
+    dst_image, src_desc \
+    = resample_tif_inplace(
+        src_filepath = src_filepath,
+        ref_meta = ref_meta,
+        resampling = resampling,
+        src_nodata = src_nodata,
+        dst_nodata = dst_nodata,
+        dst_dtype = dst_dtype,
+    )
+
+    with rasterio.open(dst_filepath, 'w', **ref_meta) as dst:
+        dst.descriptions = src_desc
+        dst.write(dst_image)
 
 
 def plot_clustered_lineplots(
     crop_name:str,
     band_name:str,
     timeseries:np.ndarray,
-    y:list,
+    x:list,
     cluster_ids:np.ndarray, 
     save_filepath:str,
     alpha:float=0.05,
@@ -146,12 +322,13 @@ def plot_clustered_lineplots(
     ncols:int=3,
     limit_plots_per_cluster:int=1000,
     random_state:int=42,
-    y_label:str='dates',
+    x_label:str='dates',
     cluster_id_to_color_map:dict=None,
+    x_label_rotation:float = 0,
 ):
     n_points, n_timestamps = timeseries.shape
 
-    if len(y) != n_timestamps:
+    if len(x) != n_timestamps:
         raise ValueError('Length of y should match timeseries shape.')
     
     unique_cluster_ids, counts = np.unique(cluster_ids, return_counts=True)
@@ -173,7 +350,7 @@ def plot_clustered_lineplots(
             timeseries, 
             np.array([cluster_ids]).T
         ], axis=1),
-        columns=['id'] + y + ['cluster_id']
+        columns=['id'] + list(x) + ['cluster_id']
     )
     _df['id'] = _df['id'].astype(int)
     _df['cluster_id'] = _df['cluster_id'].astype(int)
@@ -182,7 +359,7 @@ def plot_clustered_lineplots(
         df_to_melt_i = _df[_df['cluster_id']==cluster_id]
         melted_df_i = df_to_melt_i[_df.columns[:-1]].melt(
             id_vars='id',
-            var_name=y_label, 
+            var_name=x_label, 
             value_name=band_name,
         )
         melted_df_i['cluster_id'] = cluster_id
@@ -202,7 +379,7 @@ def plot_clustered_lineplots(
         _df_plot = _df_melted[_df_melted['cluster_id']==cluster_number]
         count = _df_plot['id'].unique().shape[0]
         ids = _df_plot['id'].unique().tolist()
-        np.random.RandomState(seed=random_state).shuffle(x=ids)
+        np.random.RandomState(seed=random_state).shuffle(ids)
         selected_ids = ids[:limit_plots_per_cluster]
         _df_plot = _df_plot[_df_plot['id'].isin(selected_ids)]
         limited_count = _df_plot['id'].unique().shape[0]
@@ -215,7 +392,7 @@ def plot_clustered_lineplots(
         g = sns.lineplot(
             data=_df_plot,
             ax=ax,
-            x=y_label,
+            x=x_label,
             y=band_name,
             hue='id',
             alpha=alpha,
@@ -227,6 +404,9 @@ def plot_clustered_lineplots(
         g.set_ylim([y_min, y_max])
         g.set_title(f'crop: {crop_name}, cluster_id: {cluster_number}, count: {count}')
         g.grid()
+
+        if x_label_rotation != 0:
+            g.set_xticklabels(g.get_xticklabels(), rotation=x_label_rotation)
 
     while j < nrows:
         fig.delaxes(axs[j][i])
@@ -248,6 +428,28 @@ def get_bounds_gdf(shapes_gdf:gpd.GeoDataFrame):
     return bounds_gdf
 
 
+def get_bounds_gdf_from_image(
+    filepath:str,
+):
+    with rasterio.open(filepath) as src:
+        crs = src.crs
+        bounds = src.bounds
+    
+    return gpd.GeoDataFrame(
+        data = {
+            'geometry': [
+                shapely.Polygon([
+                    [bounds.left, bounds.bottom],
+                    [bounds.right, bounds.bottom],
+                    [bounds.right, bounds.top],
+                    [bounds.left, bounds.top],
+                ])
+            ]
+        },
+        crs = crs
+    )
+
+
 def get_actual_bounds_gdf(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
     bounds_gdf = get_bounds_gdf(shapes_gdf=shapes_gdf)
     out_image, out_meta = crop_tif(src_filepath=src_filepath, shapes_gdf=bounds_gdf)
@@ -263,3 +465,150 @@ def get_actual_bounds_gdf(src_filepath:str, shapes_gdf:gpd.GeoDataFrame):
         crs=out_meta['crs'],
     )
     return actual_bounds_gdf
+
+
+def decompress_gzip(gzip_filepath:str, out_filepath:str):
+    with gzip.open(gzip_filepath) as gzip_file:
+        with open(out_filepath, 'wb') as f_out:
+            shutil.copyfileobj(gzip_file, f_out)
+
+
+def read_tif(tif_filepath:str):
+    with rasterio.open(tif_filepath) as src:
+        ndarray = src.read()
+        meta = src.meta.copy()
+    return ndarray, meta
+
+
+def get_random_alnum_str(length:int=5):
+    return ''.join(random.choice(
+        string.ascii_uppercase + string.ascii_lowercase + string.digits
+    ) for _ in range(length))
+
+
+def get_epochs_str(add_random_alnum:bool=True, length:int=5):
+    random_alnum = ''
+    if add_random_alnum:
+        random_alnum = get_random_alnum_str(length=length)
+    return f"{int(datetime.datetime.now().timestamp() * 1000000)}{random_alnum}"
+
+
+def add_epochs_prefix(
+    filepath, 
+    prefix:str='', 
+    new_folderpath=None, 
+    add_random_alnum:bool=True, 
+    length:int=5,
+    truncate_upto:int=None,
+):
+    epoch_str = get_epochs_str(add_random_alnum=add_random_alnum, length=length)
+    temp_prefix = f"{prefix}{epoch_str}_"
+    temp_tif_filepath = modify_filepath(
+        filepath = filepath,
+        prefix = temp_prefix,
+        new_folderpath = new_folderpath,
+        truncate_upto = truncate_upto,
+    )
+    return temp_tif_filepath
+
+
+class GZipTIF(object):
+    def __init__(self, gzip_tif_filepath):
+        self.gzip_tif_filepath = gzip_tif_filepath
+        self.tif_filepath = None
+
+
+    def _generate_temp_tif_filepath(self):
+        gzip_tif_filepath_wo_ext = self.gzip_tif_filepath[:-3]
+        temp_tif_filepath = add_epochs_prefix(
+            filepath=gzip_tif_filepath_wo_ext, 
+            prefix='temp_'
+        )
+        return temp_tif_filepath
+    
+
+    def decompress_and_load(self, tif_filepath:str=None):
+        if self.tif_filepath is None:
+            if tif_filepath is None:
+                tif_filepath = self._generate_temp_tif_filepath()
+            self.tif_filepath = tif_filepath
+            decompress_gzip(
+                gzip_filepath=self.gzip_tif_filepath, 
+                out_filepath=self.tif_filepath,
+            )
+        return self.tif_filepath
+    
+
+    def delete_tif(self):
+        if self.tif_filepath is not None:
+            os.remove(self.tif_filepath)
+            self.tif_filepath = None
+    
+
+    def __del__(self):
+        self.delete_tif()
+        
+
+def get_mask_coords(
+    mask_tif_filepaths:list[str],
+):
+    with rasterio.open(mask_tif_filepaths[0]) as src:
+        meta = src.meta.copy()
+    
+    out_mask, out_transform = rasterio.merge.merge(
+        mask_tif_filepaths,
+        method=rasterio.merge.copy_max,
+    )
+    mask_xs, mask_ys = np.where(out_mask[0] == 1)
+
+    crs = meta['crs']
+    return mask_xs, mask_ys, out_transform, crs
+
+
+def compute_longlat(x:float, y:float, shift:float, transform:rasterio.Affine)->tuple[float]:
+    long, lat = transform * (y +  shift, x + shift)
+    return long, lat
+
+
+def add_point_geom_from_xy(
+    row:dict,
+    shift:float,
+    transform:rasterio.Affine,
+    x_col:str = 'x',
+    y_col:str = 'y',
+    point_geom_col:str = 'geometry',
+):
+    long, lat = compute_longlat(
+        x = row[x_col],
+        y = row[y_col],
+        shift = shift,
+        transform = transform,
+    )
+    row[point_geom_col] = shapely.Point(long, lat)
+    return row
+
+
+def create_xy_gdf(
+    mask_tif_filepaths:list[str]
+):
+    mask_xs, mask_ys, mask_transform, mask_crs = \
+    get_mask_coords(mask_tif_filepaths = mask_tif_filepaths)
+
+    xy_gdf = gpd.GeoDataFrame(pd.DataFrame(
+        data = {
+            'x': mask_xs,
+            'y': mask_ys,
+        }
+    ).apply(
+        lambda row: add_point_geom_from_xy(
+            row = row,
+            shift = 0.5,
+            transform = mask_transform,
+            x_col = 'x',
+            y_col = 'y',
+            point_geom_col = 'geometry',
+        ), axis=1
+    ), crs=mask_crs)
+
+    return xy_gdf
+
